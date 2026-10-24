@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app xmlns="https://jakarta.ee/xml/ns/jakartaee"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="https://jakarta.ee/xml/ns/jakartaee https://jakarta.ee/xml/ns/jakartaee/web-app_6_0.xsd"
+         version="6.0">
+
+    <display-name>SkillTrack</display-name>
+
+    <listener>
+        <listener-class>com.skilltrack.config.AppContextListener</listener-class>
+    </listener>
+
+    <welcome-file-list>
+        <welcome-file>index.jsp</welcome-file>
+    </welcome-file-list>
+
+    <!-- Dashboard Servlet -->
+    <servlet>
+        <servlet-name>DashboardServlet</servlet-name>
+        <servlet-class>com.skilltrack.servlet.DashboardServlet</servlet-class>
+    </servlet>
+    <servlet-mapping>
+        <servlet-name>DashboardServlet</servlet-name>
+        <url-pattern>/dashboard</url-pattern>
+    </servlet-mapping>
+
+    <!-- Sessions Servlet -->
+    <servlet>
+        <servlet-name>SessionServlet</servlet-name>
+        <servlet-class>com.skilltrack.servlet.SessionServlet</servlet-class>
+    </servlet>
+    <servlet-mapping>
+        <servlet-name>SessionServlet</servlet-name>
+        <url-pattern>/sessions</url-pattern>
+        <url-pattern>/sessions/*</url-pattern>
+    </servlet-mapping>
+
+    <!-- Skills Servlet -->
+    <servlet>
+        <servlet-name>SkillServlet</servlet-name>
+        <servlet-class>com.skilltrack.servlet.SkillServlet</servlet-class>
+    </servlet>
+    <servlet-mapping>
+        <servlet-name>SkillServlet</servlet-name>
+        <url-pattern>/skills</url-pattern>
+        <url-pattern>/skills/*</url-pattern>
+    </servlet-mapping>
+
+    <session-config>
+        <session-timeout>60</session-timeout>
+        <cookie-config>
+            <http-only>true</http-only>
+        </cookie-config>
+    </session-config>
+
+</web-app>

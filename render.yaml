@@ -1,0 +1,30 @@
+services:
+  # SkillTrack Web Service on Render
+  - type: web
+    name: skilltrack
+    env: docker
+    plan: free
+    dockerfilePath: Dockerfile
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      # Option A: Full JDBC / MySQL URL
+      # e.g., jdbc:mysql://<host>:<port>/<dbname>?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      - key: MYSQL_URL
+        sync: false
+      - key: MYSQL_USER
+        sync: false
+      - key: MYSQL_PASSWORD
+        sync: false
+
+      # Option B: Or individual connection parameters
+      - key: MYSQLHOST
+        sync: false
+      - key: MYSQLPORT
+        value: "3306"
+      - key: MYSQLDATABASE
+        value: "skilltrack"
+      - key: MYSQLUSER
+        sync: false
+      - key: MYSQLPASSWORD
+        sync: false
