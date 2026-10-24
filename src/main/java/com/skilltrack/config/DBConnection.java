@@ -77,6 +77,7 @@ public class DBConnection {
                     int port = uri.getPort() == -1 ? 3306 : uri.getPort();
                     String path = uri.getPath();
                     if (path != null && path.startsWith("/")) path = path.substring(1);
+                    if (path == null || path.isBlank()) path = "defaultdb";
                     
                     String userInfo = uri.getUserInfo();
                     if (userInfo != null && userInfo.contains(":")) {
@@ -84,8 +85,14 @@ public class DBConnection {
                         if (username == null) username = parts[0];
                         if (password == null) password = parts[1];
                     }
+
+                    // Aiven and cloud databases require SSL
+                    boolean isCloudDb = (host != null && (host.contains("aivencloud") || host.contains("render") || host.contains("clever"))) 
+                                        || rawUrl.contains("ssl-mode") || rawUrl.contains("ssl=true");
+                    String sslConfig = isCloudDb ? "useSSL=true&requireSSL=true" : "useSSL=false&allowPublicKeyRetrieval=true";
+
                     jdbcUrl = "jdbc:mysql://" + host + ":" + port + "/" + path
-                            + "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8";
+                            + "?" + sslConfig + "&serverTimezone=UTC&characterEncoding=UTF-8";
                 } else if (rawUrl.startsWith("jdbc:mysql://")) {
                     jdbcUrl = rawUrl;
                 } else {
