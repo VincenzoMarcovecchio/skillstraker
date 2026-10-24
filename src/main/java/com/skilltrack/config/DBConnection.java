@@ -4,13 +4,13 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.net.URI;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class DBConnection {
     private static final Logger LOGGER = Logger.getLogger(DBConnection.class.getName());
     private static HikariDataSource dataSource;
+    private static String lastInitError = null;
 
     static {
         initDataSource();
@@ -25,111 +25,121 @@ public class DBConnection {
             Class.forName("com.mysql.cj.jdbc.Driver");
             HikariConfig config = new HikariConfig();
 
-            // 1. Check for Render MySQL plugin environment variables:
-            // MYSQLHOST, MYSQLPORT, MYSQLDATABASE, MYSQLUSER, MYSQLPASSWORD
-            String mysqlHost = System.getenv("MYSQLHOST");
-            String mysqlPort = System.getenv("MYSQLPORT");
-            String mysqlDatabase = System.getenv("MYSQLDATABASE");
-            String mysqlUser = System.getenv("MYSQLUSER");
-            String mysqlPassword = System.getenv("MYSQLPASSWORD");
-
-            // 2. Check for URL variables (MYSQL_URL, DATABASE_URL, DB_URL, SPRING_DATASOURCE_URL)
+            // Check all common URL variables
             String rawUrl = System.getenv("MYSQL_URL");
-            if (rawUrl == null || rawUrl.isBlank()) {
-                rawUrl = System.getenv("DATABASE_URL");
-            }
-            if (rawUrl == null || rawUrl.isBlank()) {
-                rawUrl = System.getenv("DB_URL");
-            }
-            if (rawUrl == null || rawUrl.isBlank()) {
-                rawUrl = System.getenv("SPRING_DATASOURCE_URL");
-            }
+            if (rawUrl == null || rawUrl.isBlank()) rawUrl = System.getenv("DATABASE_URL");
+            if (rawUrl == null || rawUrl.isBlank()) rawUrl = System.getenv("DB_URL");
+            if (rawUrl == null || rawUrl.isBlank()) rawUrl = System.getenv("AIVEN_URL");
+            if (rawUrl == null || rawUrl.isBlank()) rawUrl = System.getenv("JAWSDB_URL");
+            if (rawUrl == null || rawUrl.isBlank()) rawUrl = System.getenv("SPRING_DATASOURCE_URL");
+
+            // Check discrete host/user/pass variables
+            String host = System.getenv("MYSQLHOST");
+            if (host == null || host.isBlank()) host = System.getenv("DB_HOST");
+
+            String port = System.getenv("MYSQLPORT");
+            if (port == null || port.isBlank()) port = System.getenv("DB_PORT");
+            if (port == null || port.isBlank()) port = "3306";
+
+            String dbName = System.getenv("MYSQLDATABASE");
+            if (dbName == null || dbName.isBlank()) dbName = System.getenv("DB_NAME");
+
+            String username = System.getenv("MYSQLUSER");
+            if (username == null || username.isBlank()) username = System.getenv("MYSQL_USER");
+            if (username == null || username.isBlank()) username = System.getenv("DB_USER");
+
+            String password = System.getenv("MYSQLPASSWORD");
+            if (password == null) password = System.getenv("MYSQL_PASSWORD");
+            if (password == null) password = System.getenv("DB_PASSWORD");
 
             String jdbcUrl;
-            String username = System.getenv("DB_USER");
-            if (username == null || username.isBlank()) {
-                username = System.getenv("MYSQL_USER");
-            }
-            if (username == null || username.isBlank()) {
-                username = System.getenv("SPRING_DATASOURCE_USERNAME");
-            }
 
-            String password = System.getenv("DB_PASSWORD");
-            if (password == null) {
-                password = System.getenv("MYSQL_PASSWORD");
-            }
-            if (password == null) {
-                password = System.getenv("SPRING_DATASOURCE_PASSWORD");
-            }
+            if (rawUrl != null && !rawUrl.isBlank()) {
+                rawUrl = rawUrl.trim();
+                LOGGER.info("Detected database connection URL from environment variables.");
 
-            if (mysqlHost != null && !mysqlHost.isBlank() && mysqlDatabase != null) {
-                // Render Managed MySQL Environment
-                String port = (mysqlPort != null && !mysqlPort.isBlank()) ? mysqlPort : "3306";
-                jdbcUrl = "jdbc:mysql://" + mysqlHost + ":" + port + "/" + mysqlDatabase
-                        + "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8";
-                if (username == null && mysqlUser != null) username = mysqlUser;
-                if (password == null && mysqlPassword != null) password = mysqlPassword;
-            } else if (rawUrl != null && !rawUrl.isBlank()) {
-                // Parse URI or JDBC URL
                 if (rawUrl.startsWith("mysql://")) {
-                    URI uri = new URI(rawUrl);
-                    String host = uri.getHost();
-                    int port = uri.getPort() == -1 ? 3306 : uri.getPort();
-                    String path = uri.getPath();
-                    if (path != null && path.startsWith("/")) path = path.substring(1);
-                    if (path == null || path.isBlank()) path = "defaultdb";
+                    // Robust parser for mysql://user:pass@host:port/dbname?ssl-mode=...
+                    String withoutPrefix = rawUrl.substring("mysql://".length());
                     
-                    String userInfo = uri.getUserInfo();
-                    if (userInfo != null && userInfo.contains(":")) {
-                        String[] parts = userInfo.split(":", 2);
-                        if (username == null) username = parts[0];
-                        if (password == null) password = parts[1];
+                    int atIndex = withoutPrefix.lastIndexOf('@');
+                    String hostAndPath;
+                    if (atIndex != -1) {
+                        String creds = withoutPrefix.substring(0, atIndex);
+                        hostAndPath = withoutPrefix.substring(atIndex + 1);
+                        int colonIdx = creds.indexOf(':');
+                        if (colonIdx != -1) {
+                            if (username == null) username = creds.substring(0, colonIdx);
+                            if (password == null) password = creds.substring(colonIdx + 1);
+                        } else {
+                            if (username == null) username = creds;
+                        }
+                    } else {
+                        hostAndPath = withoutPrefix;
                     }
 
-                    // Aiven and cloud databases require SSL
-                    boolean isCloudDb = (host != null && (host.contains("aivencloud") || host.contains("render") || host.contains("clever"))) 
-                                        || rawUrl.contains("ssl-mode") || rawUrl.contains("ssl=true");
-                    String sslConfig = isCloudDb ? "useSSL=true&requireSSL=true" : "useSSL=false&allowPublicKeyRetrieval=true";
+                    // Separate host:port and path/query
+                    String hostPort = hostAndPath;
+                    String pathQuery = "defaultdb";
+                    int slashIdx = hostAndPath.indexOf('/');
+                    if (slashIdx != -1) {
+                        hostPort = hostAndPath.substring(0, slashIdx);
+                        pathQuery = hostAndPath.substring(slashIdx + 1);
+                        if (pathQuery.isBlank()) pathQuery = "defaultdb";
+                    }
 
-                    jdbcUrl = "jdbc:mysql://" + host + ":" + port + "/" + path
-                            + "?" + sslConfig + "&serverTimezone=UTC&characterEncoding=UTF-8";
+                    // Extract database name (before any ?)
+                    String database = pathQuery;
+                    if (database.contains("?")) {
+                        database = database.substring(0, database.indexOf('?'));
+                    }
+                    if (database.isBlank()) database = "defaultdb";
+
+                    boolean isCloud = rawUrl.contains("aivencloud") || rawUrl.contains("render") || rawUrl.contains("ssl-mode");
+                    String ssl = isCloud ? "useSSL=true&requireSSL=true" : "useSSL=false&allowPublicKeyRetrieval=true";
+
+                    jdbcUrl = "jdbc:mysql://" + hostPort + "/" + database
+                            + "?" + ssl + "&serverTimezone=UTC&characterEncoding=UTF-8";
+
                 } else if (rawUrl.startsWith("jdbc:mysql://")) {
                     jdbcUrl = rawUrl;
                 } else {
                     jdbcUrl = "jdbc:mysql://" + rawUrl;
                 }
+
+            } else if (host != null && !host.isBlank()) {
+                String database = (dbName != null && !dbName.isBlank()) ? dbName : "defaultdb";
+                boolean isCloud = host.contains("aivencloud") || host.contains("render");
+                String ssl = isCloud ? "useSSL=true&requireSSL=true" : "useSSL=false&allowPublicKeyRetrieval=true";
+                jdbcUrl = "jdbc:mysql://" + host + ":" + port + "/" + database
+                        + "?" + ssl + "&serverTimezone=UTC&characterEncoding=UTF-8";
             } else {
-                // Local Default (e.g. XAMPP MySQL or local install)
+                // Warning: No cloud database URL found, defaulting to localhost
+                LOGGER.warning("No MYSQL_URL or database environment variables found! Defaulting to localhost:3306");
                 jdbcUrl = "jdbc:mysql://localhost:3306/skilltrack?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8";
+                if (username == null) username = "root";
+                if (password == null) password = "";
             }
 
-            if (username == null || username.isBlank()) {
-                username = "root";
-            }
-            if (password == null) {
-                password = "";
-            }
-
-            LOGGER.info("Configuring DB connection to: " + jdbcUrl.replaceAll("password=[^&]*", "password=***"));
+            LOGGER.info("Connecting to JDBC URL: " + jdbcUrl.replaceAll("password=[^&]*", "password=***"));
 
             config.setJdbcUrl(jdbcUrl);
-            config.setUsername(username);
-            config.setPassword(password);
+            if (username != null) config.setUsername(username);
+            if (password != null) config.setPassword(password);
             config.setDriverClassName("com.mysql.cj.jdbc.Driver");
 
-            config.setMaximumPoolSize(10);
-            config.setMinimumIdle(2);
+            config.setMaximumPoolSize(5);
+            config.setMinimumIdle(1);
             config.setIdleTimeout(30000);
-            config.setConnectionTimeout(30000);
+            config.setConnectionTimeout(20000); // 20s timeout
             config.setMaxLifetime(1800000);
-            config.addDataSourceProperty("cachePrepStmts", "true");
-            config.addDataSourceProperty("prepStmtCacheSize", "250");
-            config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
 
             dataSource = new HikariDataSource(config);
-            LOGGER.info("HikariCP DataSource initialized successfully.");
+            lastInitError = null;
+            LOGGER.info("HikariCP DataSource successfully initialized.");
 
         } catch (Exception e) {
+            lastInitError = e.getClass().getSimpleName() + ": " + e.getMessage();
             LOGGER.log(Level.SEVERE, "Failed to initialize DataSource: " + e.getMessage(), e);
         }
     }
@@ -139,7 +149,11 @@ public class DBConnection {
             initDataSource();
         }
         if (dataSource == null) {
-            throw new SQLException("DataSource could not be initialized.");
+            String hint = "";
+            if (System.getenv("MYSQL_URL") == null && System.getenv("DATABASE_URL") == null) {
+                hint = " [HINT: MYSQL_URL environment variable is NOT set in Render! Please add MYSQL_URL in your Render Web Service Environment settings.]";
+            }
+            throw new SQLException("DataSource could not be initialized: " + (lastInitError != null ? lastInitError : "Unknown error") + hint);
         }
         return dataSource.getConnection();
     }
