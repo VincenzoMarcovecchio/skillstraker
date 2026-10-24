@@ -24,25 +24,28 @@ public class DBConnection {
         }
 
         try {
-            Class.forName("com.mysql.cj.jdbc.Driver");
             HikariConfig config = new HikariConfig();
 
-            // Check all common database URL variables
+            // Check environment variables
             String rawUrl = System.getenv("MYSQL_URL");
             if (rawUrl == null || rawUrl.isBlank()) rawUrl = System.getenv("DATABASE_URL");
+            if (rawUrl == null || rawUrl.isBlank()) rawUrl = System.getenv("POSTGRES_URL");
             if (rawUrl == null || rawUrl.isBlank()) rawUrl = System.getenv("DB_URL");
             if (rawUrl == null || rawUrl.isBlank()) rawUrl = System.getenv("AIVEN_URL");
             if (rawUrl == null || rawUrl.isBlank()) rawUrl = System.getenv("SPRING_DATASOURCE_URL");
 
             String username = System.getenv("MYSQLUSER");
             if (username == null || username.isBlank()) username = System.getenv("MYSQL_USER");
+            if (username == null || username.isBlank()) username = System.getenv("PGUSER");
             if (username == null || username.isBlank()) username = System.getenv("DB_USER");
 
             String password = System.getenv("MYSQLPASSWORD");
             if (password == null) password = System.getenv("MYSQL_PASSWORD");
+            if (password == null) password = System.getenv("PGPASSWORD");
             if (password == null) password = System.getenv("DB_PASSWORD");
 
             String jdbcUrl;
+            String driverClass;
 
             if (rawUrl != null && !rawUrl.isBlank()) {
                 String clean = rawUrl.trim();
@@ -51,17 +54,22 @@ public class DBConnection {
                     clean = clean.substring(1, clean.length() - 1).trim();
                 }
 
-                // Strip leading "jdbc:" if present
+                boolean isPostgres = clean.startsWith("postgres://") || clean.startsWith("postgresql://") 
+                                  || clean.startsWith("jdbc:postgresql:") || clean.contains("postgres");
+
+                // Strip leading prefixes
                 if (clean.startsWith("jdbc:")) {
                     clean = clean.substring("jdbc:".length()).trim();
                 }
-
-                // Strip leading "mysql://"
                 if (clean.startsWith("mysql://")) {
                     clean = clean.substring("mysql://".length()).trim();
+                } else if (clean.startsWith("postgres://")) {
+                    clean = clean.substring("postgres://".length()).trim();
+                } else if (clean.startsWith("postgresql://")) {
+                    clean = clean.substring("postgresql://".length()).trim();
                 }
 
-                // Check for user:pass@
+                // Parse user:pass@
                 String hostAndPath = clean;
                 int atIdx = clean.lastIndexOf('@');
                 if (atIdx != -1) {
@@ -103,17 +111,29 @@ public class DBConnection {
                     database = "defaultdb";
                 }
 
-                boolean isCloud = rawUrl.contains("aivencloud") || rawUrl.contains("render") || rawUrl.contains("ssl-mode");
-                String sslParams = isCloud
-                        ? "useSSL=true&requireSSL=true&allowPublicKeyRetrieval=true"
-                        : "useSSL=false&allowPublicKeyRetrieval=true";
+                boolean isCloud = rawUrl.contains("aivencloud") || rawUrl.contains("render") || rawUrl.contains("ssl");
 
-                // Standard clean JDBC URL format expected by MySQL Connector/J
-                jdbcUrl = "jdbc:mysql://" + hostPort + "/" + database
-                        + "?" + sslParams + "&serverTimezone=UTC&characterEncoding=UTF-8";
+                if (isPostgres) {
+                    driverClass = "org.postgresql.Driver";
+                    Class.forName(driverClass);
+                    String ssl = isCloud ? "sslmode=require" : "sslmode=disable";
+                    jdbcUrl = "jdbc:postgresql://" + hostPort + "/" + database + "?" + ssl;
+                    LOGGER.info("Configured PostgreSQL connection: " + jdbcUrl);
+                } else {
+                    driverClass = "com.mysql.cj.jdbc.Driver";
+                    Class.forName(driverClass);
+                    String sslParams = isCloud
+                            ? "useSSL=true&requireSSL=true&allowPublicKeyRetrieval=true"
+                            : "useSSL=false&allowPublicKeyRetrieval=true";
+                    jdbcUrl = "jdbc:mysql://" + hostPort + "/" + database
+                            + "?" + sslParams + "&serverTimezone=UTC&characterEncoding=UTF-8";
+                    LOGGER.info("Configured MySQL connection: " + jdbcUrl);
+                }
 
             } else {
-                // Local fallback (e.g. XAMPP on localhost)
+                // Local fallback: default to MySQL (e.g. XAMPP)
+                driverClass = "com.mysql.cj.jdbc.Driver";
+                Class.forName(driverClass);
                 String host = System.getenv("MYSQLHOST");
                 if (host == null || host.isBlank()) host = "localhost";
                 String port = System.getenv("MYSQLPORT");
@@ -128,12 +148,10 @@ public class DBConnection {
                         + "?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8";
             }
 
-            LOGGER.info("Connecting to MySQL at: " + jdbcUrl);
-
             config.setJdbcUrl(jdbcUrl);
+            config.setDriverClassName(driverClass);
             if (username != null && !username.isBlank()) config.setUsername(username);
             if (password != null) config.setPassword(password);
-            config.setDriverClassName("com.mysql.cj.jdbc.Driver");
 
             config.setMaximumPoolSize(5);
             config.setMinimumIdle(1);

@@ -29,33 +29,62 @@ public class AppContextListener implements ServletContextListener {
     }
 
     private void initSchema(Connection conn) throws Exception {
-        try (Statement stmt = conn.createStatement()) {
-            // Create skills table
-            stmt.execute("""
-                CREATE TABLE IF NOT EXISTS skills (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                    name VARCHAR(100) NOT NULL UNIQUE,
-                    category VARCHAR(100) DEFAULT 'General',
-                    color_hex VARCHAR(20) NOT NULL DEFAULT '#00875A',
-                    weekly_goal_hours DOUBLE NOT NULL DEFAULT 5.0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-            """);
+        String dbType = conn.getMetaData().getDatabaseProductName().toLowerCase();
+        boolean isPostgres = dbType.contains("postgres");
 
-            // Create practice_sessions table
-            stmt.execute("""
-                CREATE TABLE IF NOT EXISTS practice_sessions (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                    skill_id BIGINT NOT NULL,
-                    duration_minutes INT NOT NULL,
-                    notes TEXT,
-                    session_date DATE NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    CONSTRAINT fk_practice_skill FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-            """);
+        try (Statement stmt = conn.createStatement()) {
+            if (isPostgres) {
+                LOGGER.info("Initializing PostgreSQL tables...");
+                stmt.execute("""
+                    CREATE TABLE IF NOT EXISTS skills (
+                        id BIGSERIAL PRIMARY KEY,
+                        name VARCHAR(100) NOT NULL UNIQUE,
+                        category VARCHAR(100) DEFAULT 'General',
+                        color_hex VARCHAR(20) NOT NULL DEFAULT '#00875A',
+                        weekly_goal_hours DOUBLE PRECISION NOT NULL DEFAULT 5.0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """);
+
+                stmt.execute("""
+                    CREATE TABLE IF NOT EXISTS practice_sessions (
+                        id BIGSERIAL PRIMARY KEY,
+                        skill_id BIGINT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+                        duration_minutes INT NOT NULL,
+                        notes TEXT,
+                        session_date DATE NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                """);
+            } else {
+                LOGGER.info("Initializing MySQL tables...");
+                stmt.execute("""
+                    CREATE TABLE IF NOT EXISTS skills (
+                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                        name VARCHAR(100) NOT NULL UNIQUE,
+                        category VARCHAR(100) DEFAULT 'General',
+                        color_hex VARCHAR(20) NOT NULL DEFAULT '#00875A',
+                        weekly_goal_hours DOUBLE NOT NULL DEFAULT 5.0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+                """);
+
+                stmt.execute("""
+                    CREATE TABLE IF NOT EXISTS practice_sessions (
+                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                        skill_id BIGINT NOT NULL,
+                        duration_minutes INT NOT NULL,
+                        notes TEXT,
+                        session_date DATE NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        CONSTRAINT fk_practice_skill FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+                """);
+            }
         }
     }
 
@@ -71,7 +100,6 @@ public class AppContextListener implements ServletContextListener {
         if (!hasSkills) {
             LOGGER.info("Seeding initial skills matching the UI design...");
 
-            // Insert 4 skills
             long spanishId, guitarId, typeScriptId, cookingId;
             try (PreparedStatement ps = conn.prepareStatement(
                     "INSERT INTO skills (name, category, color_hex, weekly_goal_hours) VALUES (?, ?, ?, ?)",
@@ -148,20 +176,18 @@ public class AppContextListener implements ServletContextListener {
                 ps.setDate(4, java.sql.Date.valueOf(today.minusDays(1)));
                 ps.addBatch();
 
-                // Generate rich historical sessions over the last 18 weeks (126 days)
-                // to populate the heatmap grid realistically matching the screenshot!
+                // Historical sessions over last 18 weeks (126 days)
                 Random random = new Random(42);
                 long[] allSkillIds = new long[]{spanishId, guitarId, typeScriptId, cookingId};
 
                 for (int i = 2; i <= 126; i++) {
                     LocalDate d = today.minusDays(i);
-                    // Higher density in recent weeks (matching the screenshot's right-side density)
                     double chanceOfPractice = i < 35 ? 0.85 : (i < 70 ? 0.60 : 0.40);
                     if (random.nextDouble() < chanceOfPractice) {
                         int numSessions = (i < 30 && random.nextDouble() < 0.4) ? 2 : 1;
                         for (int s = 0; s < numSessions; s++) {
                             long sid = allSkillIds[random.nextInt(allSkillIds.length)];
-                            int mins = (random.nextInt(4) + 1) * 30; // 30, 60, 90, 120
+                            int mins = (random.nextInt(4) + 1) * 30;
                             ps.setLong(1, sid);
                             ps.setInt(2, mins);
                             ps.setString(3, "Regular practice session");

@@ -55,6 +55,13 @@
             <version>8.3.0</version>
         </dependency>
 
+        <!-- PostgreSQL JDBC Driver (Supports Aiven/Render PostgreSQL) -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.3</version>
+        </dependency>
+
         <!-- HikariCP Connection Pooling for reliable database access on cloud & local -->
         <dependency>
             <groupId>com.zaxxer</groupId>
